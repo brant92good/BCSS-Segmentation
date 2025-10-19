@@ -1,0 +1,243 @@
+# ========================
+# BCSS Segmentation Project
+# ========================
+
+# ----------------
+# Data Files
+# ----------------
+# Dataset folders (usually large)
+BCSS/
+data/
+dataset/
+datasets/
+*.zip
+*.tar
+*.tar.gz
+
+# Images
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.tiff
+*.tif
+*.gif
+
+# ----------------
+# Model & Training
+# ----------------
+# Checkpoints
+ckpt/
+checkpoints/
+checkpoint/
+saved_models/
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.pb
+*.onnx
+
+# Logs
+logs/
+log/
+runs/
+tensorboard/
+wandb/
+*.log
+nohup.out
+*.out
+
+# Training outputs
+output/
+outputs/
+results/
+predictions/
+*.csv
+*.json
+
+# ----------------
+# Python
+# ----------------
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+.conda/
+!config/*.yaml
+!config/*.yml
+!environment.yaml
+!environment.yml
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# ----------------
+# Jupyter Notebook
+# ----------------
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+*.ipynb
+!analysis.ipynb
+!tutorial.ipynb
+
+# ----------------
+# IDEs & Editors
+# ----------------
+# VSCode
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# PyCharm
+.idea/
+*.iml
+*.iws
+*.ipr
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# ----------------
+# OS Files
+# ----------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+.directory
+.Trash-*
+
+# ----------------
+# Temporary Files
+# ----------------
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+*~
+
+# ----------------
+# Project Specific
+# ----------------
+# Analysis outputs
+*.png
+!README_images/*.png
+!docs/*.png
+object_size_distribution.png
+training_history.png
+
+# Experiments
+experiments/
+exp/
+test_outputs/
+
+# Cache
+.cache/
+*.cache
+
+# Secrets & Configs (if any)
+.env
+.env.local
+secrets.py
+kaggle.json
+
+# ----------------
+# Git
+# ----------------
+*.orig
+*.rej
+
+# ----------------
+# Misc
+# ----------------
+*.lock
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+.pytype/
+cython_debug/
+
+# Keep these files
+!.gitignore
+!README.md
+!requirements.txt
+!IMPROVEMENTS.md
+!PERFORMANCE_TARGET.md
+!POSTPROCESS_TUNING.md
