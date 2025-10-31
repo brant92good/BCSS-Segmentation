@@ -23,12 +23,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'config'))
 
 from config import (
     TRAIN_IMAGE_PATH, VAL_IMAGE_PATH, TRAIN_MASK_PATH, VAL_MASK_PATH, TEST_IMAGE_PATH,
-    MEAN, STD, N_CHANNELS, N_CLASSES, USE_ATTENTION,
+    MEAN, STD, N_CHANNELS, N_CLASSES, BASE_C, USE_ATTENTION, USE_DROPOUT, DROPOUT_RATE,
     BATCH_SIZE, ACCUMULATION_STEPS, NUM_WORKERS, MAX_LR, MAX_EPOCHS,
     WEIGHT_DECAY, EARLY_STOPPING_PATIENCE, GRAD_CLIP, LOSS_WEIGHTS,
     CHECKPOINT_DIR, LOG_DIR, OUTPUT_FILE,
-    CLASS_WEIGHTS, POST_PROCESS_MIN_SIZE, POST_PROCESS_KERNEL_SIZE,
-    POST_PROCESS_FILL_HOLES, USE_TTA
+    CLASS_WEIGHTS, POST_PROCESS_METHOD, POST_PROCESS_KERNEL_SIZE, POST_PROCESS_ITERATIONS,
+    USE_TTA, USE_AMP, AMP_DTYPE
 )
 
 from dataset import BCSSDataset, BCSSDatasetTest, create_df
@@ -39,7 +39,10 @@ from utils import (
     get_lr, get_gpu_stats, setup_gpu, create_checkpoint_dir,
     save_checkpoint, load_checkpoint, predict_image
 )
-from postprocess import post_process_mask, test_time_augmentation
+from postprocess import post_process_mask
+
+# Import AMP utilities
+from torch.cuda.amp import autocast, GradScaler
 
 
 def verify_data_paths():
@@ -108,8 +111,9 @@ def setup_data():
 
 
 def train_epoch(model, train_loader, criterion1, criterion2, optimizer, scheduler,
-                device, has_gpu, writer, epoch, grad_clip, loss_weights, accumulation_steps):
-    """Train for one epoch."""
+                device, has_gpu, writer, epoch, grad_clip, loss_weights, accumulation_steps,
+                scaler, use_amp, amp_dtype):
+    """Train for one epoch with optional mixed precision."""
     model.train()
     running_loss = 0
     iou_score = 0
@@ -120,25 +124,30 @@ def train_epoch(model, train_loader, criterion1, criterion2, optimizer, schedule
         image = image.to(device)
         mask = mask.to(device)
         
-        output = model(image)
-        
-        # Compute weighted loss
-        loss1 = criterion1(output, mask)
-        loss2 = criterion2(output, mask)
-        loss = loss_weights[0] * loss1 + loss_weights[1] * loss2
-        
-        # Gradient accumulation
-        loss = loss / accumulation_steps
+        # Forward pass with AMP
+        with autocast(enabled=use_amp, dtype=amp_dtype):
+            output = model(image)
+            
+            # Compute weighted loss
+            loss1 = criterion1(output, mask)
+            loss2 = criterion2(output, mask)
+            loss = loss_weights[0] * loss1 + loss_weights[1] * loss2
+            
+            # Gradient accumulation
+            loss = loss / accumulation_steps
         
         iou_score += mIoU(output, mask)
         accuracy += pixel_accuracy(output, mask)
         
-        loss.backward()
+        # Backward pass with AMP
+        scaler.scale(loss).backward()
         
         # Update weights every accumulation_steps batches
         if (i + 1) % accumulation_steps == 0 or (i + 1) == len(train_loader):
+            scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=grad_clip)
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad()
             
             lrs = get_lr(optimizer)
@@ -203,8 +212,8 @@ def val_epoch(model, val_loader, criterion1, criterion2, device, writer, epoch, 
 
 
 def train(model, train_loader, val_loader, criterion1, criterion2, optimizer, scheduler,
-          device, has_gpu, model_save_dir, timestamp):
-    """Main training loop."""
+          device, has_gpu, model_save_dir, timestamp, scaler, use_amp, amp_dtype):
+    """Main training loop with mixed precision support."""
     print("\n" + "="*80)
     print("TRAINING")
     print("="*80)
@@ -233,7 +242,8 @@ def train(model, train_loader, val_loader, criterion1, criterion2, optimizer, sc
         # Train
         train_loss_avg, train_iou_avg, train_acc_avg = train_epoch(
             model, train_loader, criterion1, criterion2, optimizer, scheduler,
-            device, has_gpu, writer, epoch, GRAD_CLIP, LOSS_WEIGHTS, ACCUMULATION_STEPS
+            device, has_gpu, writer, epoch, GRAD_CLIP, LOSS_WEIGHTS, ACCUMULATION_STEPS,
+            scaler, use_amp, amp_dtype
         )
         
         # Validate
@@ -350,8 +360,8 @@ def predict_test_set(model, device, X_test):
     print("\n" + "="*80)
     print("PREDICTING ON TEST SET")
     print("="*80)
-    print(f"Post-processing enabled: min_size={POST_PROCESS_MIN_SIZE}, kernel={POST_PROCESS_KERNEL_SIZE}")
-    print(f"Test-Time Augmentation: {USE_TTA}")
+    print(f"Post-processing: {POST_PROCESS_METHOD}")
+    print(f"Kernel size: {POST_PROCESS_KERNEL_SIZE}, Iterations: {POST_PROCESS_ITERATIONS}")
     
     test_set = BCSSDatasetTest(TEST_IMAGE_PATH, X_test, MEAN, STD)
     
@@ -359,18 +369,16 @@ def predict_test_set(model, device, X_test):
     for i in tqdm(range(len(test_set)), desc="Predicting"):
         img, filename = test_set[i]
         
-        # Predict with optional TTA
-        if USE_TTA:
-            pred_mask = test_time_augmentation(model, img, device, num_augments=4)
-        else:
-            pred_mask = predict_image(model, img, device)
+        # Predict
+        pred_mask = predict_image(model, img, device)
         
-        # Apply post-processing (後處理)
+        # Apply post-processing (後處理 - 使用對方的形態學方法)
         pred_mask = post_process_mask(
             pred_mask,
-            min_size=POST_PROCESS_MIN_SIZE,
+            method=POST_PROCESS_METHOD,
             kernel_size=POST_PROCESS_KERNEL_SIZE,
-            fill_holes_flag=POST_PROCESS_FILL_HOLES
+            iterations=POST_PROCESS_ITERATIONS,
+            n_classes=N_CLASSES
         )
         
         data.append({'index': filename, 'pred_mask': pred_mask.tolist()})
@@ -437,16 +445,35 @@ def main():
     print("INITIALIZING MODEL")
     print("="*80)
     
-    model = UNet(n_channels=N_CHANNELS, n_classes=N_CLASSES, use_attention=USE_ATTENTION)
-    print(f"Model initialized with {N_CLASSES} classes")
+    model = UNet(
+        n_channels=N_CHANNELS, 
+        n_classes=N_CLASSES, 
+        base_c=BASE_C,
+        use_attention=USE_ATTENTION,
+        use_dropout=USE_DROPOUT,
+        dropout_rate=DROPOUT_RATE
+    )
+    print(f"Model initialized:")
+    print(f"  - Classes: {N_CLASSES}")
+    print(f"  - Base channels: {BASE_C}")
+    print(f"  - Attention: {USE_ATTENTION}")
+    print(f"  - Dropout: {USE_DROPOUT} (rate={DROPOUT_RATE if USE_DROPOUT else 'N/A'})")
     
     # Setup training with class weights (背景權重 0.2)
     class_weights = torch.tensor(CLASS_WEIGHTS, dtype=torch.float32).to(device)
-    print(f"Class weights: {CLASS_WEIGHTS} (背景權重降低到 {CLASS_WEIGHTS[0]})")
+    print(f"\nClass weights: {CLASS_WEIGHTS} (背景權重降低到 {CLASS_WEIGHTS[0]})")
     
     criterion1 = WeightedCrossEntropyLoss(weight=class_weights)
     criterion2 = DiceLoss(gamma=2.0)
     optimizer = torch.optim.AdamW(model.parameters(), lr=MAX_LR, weight_decay=WEIGHT_DECAY)
+    
+    # Setup AMP scaler
+    scaler = GradScaler(enabled=USE_AMP)
+    amp_dtype_map = {'float16': torch.float16, 'bfloat16': torch.bfloat16}
+    amp_dtype_actual = amp_dtype_map.get(AMP_DTYPE, torch.float16)
+    print(f"\nMixed Precision Training: {USE_AMP}")
+    if USE_AMP:
+        print(f"  - Dtype: {AMP_DTYPE} ({amp_dtype_actual})")
     
     effective_steps_per_epoch = len(train_loader) // ACCUMULATION_STEPS
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -462,7 +489,8 @@ def main():
     # Train
     history, best_model_path = train(
         model, train_loader, val_loader, criterion1, criterion2,
-        optimizer, scheduler, device, has_gpu, model_save_dir, timestamp
+        optimizer, scheduler, device, has_gpu, model_save_dir, timestamp,
+        scaler, USE_AMP, amp_dtype_actual
     )
     
     # Plot history
@@ -470,7 +498,14 @@ def main():
     
     # Load best model for inference
     print(f"\nLoading best model from: {best_model_path}")
-    model = UNet(n_channels=N_CHANNELS, n_classes=N_CLASSES, use_attention=USE_ATTENTION)
+    model = UNet(
+        n_channels=N_CHANNELS, 
+        n_classes=N_CLASSES, 
+        base_c=BASE_C,
+        use_attention=USE_ATTENTION,
+        use_dropout=USE_DROPOUT,
+        dropout_rate=DROPOUT_RATE
+    )
     load_checkpoint(model, best_model_path, device=device)
     model.to(device)
     model.eval()

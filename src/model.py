@@ -1,4 +1,4 @@
-"""U-Net model architecture with attention mechanism."""
+"""U-Net model architecture with optional attention mechanism."""
 
 import torch
 import torch.nn as nn
@@ -8,7 +8,7 @@ import torch.nn.functional as F
 class DoubleConv(nn.Module):
     """Block with two convolutional blocks."""
 
-    def __init__(self, in_channels, out_channels, mid_channels=None, dropout_rate=0.1):
+    def __init__(self, in_channels, out_channels, mid_channels=None, use_dropout=False, dropout_rate=0.1):
         """
         Double convolution.
 
@@ -16,45 +16,55 @@ class DoubleConv(nn.Module):
             in_channels: Number of input channels
             out_channels: Number of output channels
             mid_channels: Number of intermediate channels
+            use_dropout: Whether to use dropout
             dropout_rate: Dropout probability
         """
         super().__init__()
         if not mid_channels:
             mid_channels = out_channels
 
-        self.double_conv = nn.Sequential(
+        layers = [
             nn.Conv2d(in_channels, mid_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(mid_channels),
-            nn.LeakyReLU(negative_slope=0.01, inplace=True),
-            nn.Dropout2d(p=dropout_rate),
+            nn.ReLU(inplace=True),
+        ]
+        
+        if use_dropout:
+            layers.append(nn.Dropout2d(p=dropout_rate))
+        
+        layers.extend([
             nn.Conv2d(mid_channels, out_channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(out_channels),
-            nn.LeakyReLU(negative_slope=0.01, inplace=True)
-        )
+            nn.ReLU(inplace=True)
+        ])
+        
+        self.double_conv = nn.Sequential(*layers)
 
     def forward(self, x):
         return self.double_conv(x)
 
 
 class Down(nn.Module):
-    """Downsampling block using stride convolution."""
+    """Downsampling block using MaxPool."""
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, out_channels, use_dropout=False, dropout_rate=0.1):
         """
         Down block.
 
         Args:
             in_channels: Number of input channels
             out_channels: Number of output channels
+            use_dropout: Whether to use dropout
+            dropout_rate: Dropout rate
         """
         super().__init__()
-        self.downsample = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels, kernel_size=2, stride=2),
-            DoubleConv(in_channels, out_channels)
+        self.maxpool_conv = nn.Sequential(
+            nn.MaxPool2d(2),
+            DoubleConv(in_channels, out_channels, use_dropout=use_dropout, dropout_rate=dropout_rate)
         )
 
     def forward(self, x):
-        return self.downsample(x)
+        return self.maxpool_conv(x)
 
 
 class AttentionBlock(nn.Module):
@@ -97,45 +107,47 @@ class AttentionBlock(nn.Module):
 
 
 class Up(nn.Module):
-    """Upsampling block with attention."""
+    """Upsampling block with optional attention."""
 
-    def __init__(self, in_channels, out_channels, skip_channels=None, use_attention=True):
+    def __init__(self, in_channels, out_channels, use_attention=False, use_dropout=False, dropout_rate=0.1):
         """
-        Up block with attention.
+        Up block with optional attention.
 
         Args:
-            in_channels: Number of input channels
+            in_channels: Number of input channels (from decoder)
             out_channels: Number of output channels
-            skip_channels: Number of skip connection channels
             use_attention: Whether to use attention mechanism
+            use_dropout: Whether to use dropout
+            dropout_rate: Dropout rate
         """
         super().__init__()
-
-        if skip_channels is None:
-            skip_channels = in_channels
         
-        self.up = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-            nn.Conv2d(in_channels, in_channels // 2, kernel_size=3, padding=1)
-        )
+        self.up = nn.ConvTranspose2d(in_channels, in_channels // 2, kernel_size=2, stride=2)
         
         self.use_attention = use_attention
         if use_attention:
             self.attention = AttentionBlock(
                 F_g=in_channels // 2,
-                F_l=skip_channels,
+                F_l=in_channels // 2,
                 F_int=in_channels // 4
             )
         
-        concat_channels = (in_channels // 2) + skip_channels
-        self.conv = DoubleConv(concat_channels, out_channels)
+        self.conv = DoubleConv(in_channels, out_channels, use_dropout=use_dropout, dropout_rate=dropout_rate)
 
     def forward(self, x1, x2):
+        """
+        Args:
+            x1: Decoder feature (to be upsampled)
+            x2: Encoder feature (skip connection)
+        """
         x1 = self.up(x1)
+        
+        # Pad if needed
         diffY = x2.size()[2] - x1.size()[2]
         diffX = x2.size()[3] - x1.size()[3]
         x1 = F.pad(x1, [diffX // 2, diffX - diffX // 2, diffY // 2, diffY - diffY // 2])
         
+        # Apply attention if enabled
         if self.use_attention:
             x2 = self.attention(g=x1, x=x2)
         
@@ -162,35 +174,38 @@ class OutConv(nn.Module):
 
 
 class UNet(nn.Module):
-    """U-Net model with attention and improved architecture."""
+    """U-Net model with optional attention and configurable channels."""
 
-    def __init__(self, n_channels, n_classes, use_attention=True):
+    def __init__(self, n_channels, n_classes, base_c=96, use_attention=False, use_dropout=False, dropout_rate=0.1):
         """
         Initialize U-Net model.
         
         Args:
             n_channels: Number of input channels
             n_classes: Number of output classes
+            base_c: Base channel count (96 for matching reference model)
             use_attention: Whether to use attention mechanism
+            use_dropout: Whether to use dropout
+            dropout_rate: Dropout rate
         """
         super().__init__()
         self.n_channels = n_channels
         self.n_classes = n_classes
 
         # Encoder
-        self.inc = DoubleConv(n_channels, 64)
-        self.down1 = Down(64, 128)
-        self.down2 = Down(128, 256)
-        self.down3 = Down(256, 512)
-        self.down4 = Down(512, 512)
+        self.inc = DoubleConv(n_channels, base_c, use_dropout=use_dropout, dropout_rate=dropout_rate)
+        self.down1 = Down(base_c, base_c * 2, use_dropout=use_dropout, dropout_rate=dropout_rate)
+        self.down2 = Down(base_c * 2, base_c * 4, use_dropout=use_dropout, dropout_rate=dropout_rate)
+        self.down3 = Down(base_c * 4, base_c * 8, use_dropout=use_dropout, dropout_rate=dropout_rate)
+        self.down4 = Down(base_c * 8, base_c * 16, use_dropout=use_dropout, dropout_rate=dropout_rate)
         
         # Decoder
-        self.up1 = Up(in_channels=512, out_channels=256, skip_channels=512, use_attention=use_attention)
-        self.up2 = Up(in_channels=256, out_channels=128, skip_channels=256, use_attention=use_attention)
-        self.up3 = Up(in_channels=128, out_channels=64, skip_channels=128, use_attention=use_attention)
-        self.up4 = Up(in_channels=64, out_channels=64, skip_channels=64, use_attention=use_attention)
+        self.up1 = Up(base_c * 16, base_c * 8, use_attention=use_attention, use_dropout=use_dropout, dropout_rate=dropout_rate)
+        self.up2 = Up(base_c * 8, base_c * 4, use_attention=use_attention, use_dropout=use_dropout, dropout_rate=dropout_rate)
+        self.up3 = Up(base_c * 4, base_c * 2, use_attention=use_attention, use_dropout=use_dropout, dropout_rate=dropout_rate)
+        self.up4 = Up(base_c * 2, base_c, use_attention=use_attention, use_dropout=use_dropout, dropout_rate=dropout_rate)
         
-        self.outc = OutConv(64, n_classes)
+        self.outc = OutConv(base_c, n_classes)
 
     def forward(self, x):
         x1 = self.inc(x)

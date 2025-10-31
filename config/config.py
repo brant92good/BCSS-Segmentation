@@ -17,39 +17,35 @@ STD = [0.229, 0.224, 0.225]
 # Model parameters
 N_CHANNELS = 3
 N_CLASSES = 3
-USE_ATTENTION = True
+BASE_C = 64  # 基礎通道數
+USE_ATTENTION = False  # 是否使用 Attention 機制 (對方的模型不使用)
+USE_DROPOUT = False  # 是否使用 Dropout
+DROPOUT_RATE = 0.1  # Dropout 比率 (當 USE_DROPOUT=True 時生效)
 
 # Training parameters
-BATCH_SIZE = 48
-ACCUMULATION_STEPS = 2
+BATCH_SIZE = 64
+ACCUMULATION_STEPS = 1
 NUM_WORKERS = 8
-MAX_LR = 5e-4  # 改為 5e-4 (原本 1e-3 太大)
-MAX_EPOCHS = 50  # 改為 50 epochs (原本 100 太多)
+MAX_LR = 3e-4  # 改為 3e-4 (原本 1e-3 太大)
+MAX_EPOCHS = 70
 WEIGHT_DECAY = 1e-4
 EARLY_STOPPING_PATIENCE = 10
 GRAD_CLIP = 1.0
 LOSS_WEIGHTS = (0.4, 0.6)  # (CE weight, Dice weight)
 
+# Mixed Precision Training
+USE_AMP = True  # 是否使用混合精度訓練
+AMP_DTYPE = 'bfloat16'  # 'float16' or 'bfloat16' (bf16 更穩定)
+
 # Class weights for handling imbalance (背景權重 0.2)
 CLASS_WEIGHTS = [0.2, 1.0, 1.0]  # [background, class1, class2]
 
-# Post-processing parameters
-# Note: For 224×224 images, object size guidelines:
-#   - 10-20 pixels: ~1×1 to 4.5×4.5 (very small, likely noise)
-#   - 20-50 pixels: ~4.5×4.5 to 7×7 (small objects)
-#   - 50-100 pixels: ~7×7 to 10×10 (medium-small objects)
-#   - 100+ pixels: 10×10+ (substantial objects)
-POST_PROCESS_MIN_SIZE = 20  # 移除小於此像素的物體 (推薦: 20-50)
-POST_PROCESS_KERNEL_SIZE = 3  # 形態學操作的 kernel 大小 (推薦: 3 or 5)
-POST_PROCESS_FILL_HOLES = True  # 是否填充空洞
+# Post-processing parameters (使用對方的形態學方法)
+# Morphological operations: Open (remove noise) + Close (fill holes)
+POST_PROCESS_METHOD = 'morphological'  # 'morphological' 或 'none'
+POST_PROCESS_KERNEL_SIZE = 5  # 形態學操作的 kernel 大小 (3-7)
+POST_PROCESS_ITERATIONS = 1  # 形態學操作的迭代次數
 USE_TTA = True  # 是否使用測試時增強 (Test-Time Augmentation)
-
-# Alternative: Class-specific min_size (if needed)
-# POST_PROCESS_MIN_SIZE_PER_CLASS = {
-#     0: 0,    # background (not used)
-#     1: 30,   # class 1
-#     2: 30,   # class 2
-# }
 
 # Paths
 CHECKPOINT_DIR = 'ckpt'
